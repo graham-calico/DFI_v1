@@ -1,0 +1,3 @@
+MaxJobCount=500000
+MaxArraySize=400001
+MaxStepCount=100000

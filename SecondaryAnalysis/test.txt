@@ -1,0 +1,1 @@
+date	spins/day	hertz	circ.wh	coat_q(sobel)	bwt_dlt(g/day)	bed_mov(pxls)	circ.fl	kpix/sec	color(8-bit)

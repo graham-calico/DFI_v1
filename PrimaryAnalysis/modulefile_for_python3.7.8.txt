@@ -1,0 +1,8 @@
+#%Module 1.0
+#
+#  Python module for use with 'environment-modules' package:
+#
+conflict                python
+prepend-path            PATH             /apps/python/3.7.8/bin/
+prepend-path            LD_LIBRARY_PATH             /apps/python/3.7.8/lib/
+setenv  PYTHON_VER 3.7.8
