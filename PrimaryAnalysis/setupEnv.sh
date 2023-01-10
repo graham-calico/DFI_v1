@@ -45,6 +45,8 @@ echo "installing keras_segmentation"
 python/3.7.8/bin/pip3.7 install git+https://github.com/divamgupta/image-segmentation-keras.git@f04852d3d51ac278e9e527d2eed78eddc5d56872
 echo "installing tqdm"
 python/3.7.8/bin/pip3.7 install tqdm
+echo "updating protobuf AFTER tensorflow installation"
+python/3.7.8/bin/pip3.7 install protobuf==3.20.0
 
 # set up the python module
 echo "copying python to module location"
