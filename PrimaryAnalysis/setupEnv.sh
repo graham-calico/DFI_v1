@@ -41,6 +41,8 @@ echo "installing opencv"
 python/3.7.8/bin/pip3.7 install opencv-python==4.1.0.25
 echo "installing google cloud storage"
 python/3.7.8/bin/pip3.7 install google-cloud-storage
+echo "downgrade urllib3 version used by google-cloud-storage"
+python/3.7.8/bin/pip3.7 install urllib3==1.26.16
 echo "installing keras_segmentation"
 python/3.7.8/bin/pip3.7 install git+https://github.com/divamgupta/image-segmentation-keras.git@f04852d3d51ac278e9e527d2eed78eddc5d56872
 echo "installing tqdm"
