@@ -18,16 +18,20 @@ the [SLURM-GCP documentation](https://github.com/SchedMD/slurm-gcp) for instruct
 how to create a cluster.  
 
 Given the high-throughput nature of this task and *current* cost and
-availability of Google Cloud resources, I *currently* (2022) recommend a cluster
+availability of Google Cloud resources, I *currently* (01/2025) recommend a cluster
 with ***many*** pre-emptible, CPU-based compute nodes in the same region as your video-file 
 storage bucket.  A sample config file appropriate to this task is provided (`sampleSlurmGcpConfig.tfvars`).
 After editing the values assigned to `cluster_name` and `project` variables at the top of the file,
-you should be able to create and destroy clusters in your Google Cloud Shell terminal as follows:
+you should be able to create and destroy clusters in your Google Cloud Shell terminal as follows (updated in 01/2025):
 
 ```bash
-$ terraform apply -var-file=sampleSlurmGcpConfig.tfvars
-$ terraform destroy -var-file=sampleSlurmGcpConfig.tfvars
+$ ./gcluster deploy deploymentFile.yaml --skip-validators=test_tf_version_for_slurm
+$ ./gcluster destroy deploymentDirectory
 ```
+
+Follow current instructions from the SLURM-GCP page.  Your .yaml file will be appropriate for your
+needs and resources; look to the SLURM-GCP [cloud docs](https://github.com/SchedMD/slurm-gcp/blob/master/docs/cloud.md) for guidance, 
+also the Google Cloud [cluster blueprint](https://cloud.google.com/cluster-toolkit/docs/setup/cluster-blueprint).
 
 *Hint:* pay special attention to the CPU specification and threading availability on your machines.
 The *current* (2022) compute-node specification in the sample config file should match up with the
@@ -53,9 +57,15 @@ this version of python using the command `python3.7`, load its module:
 $ module load python/3.7.8
 ```
 
-One of the tasks that the set-up script performs is to increase the maximum array size
+An additional set-up script is used to increase the maximum array size
 for the Slurm-GCP cluster.  These instructions make heavy use of Slurm's `--array` feature,
-so this adjustment is recommended.  In order for it to take effect, you will need to log
+so this adjustment is recommended.  Run this script on the login node:
+
+```bash
+$ ./adjustSlurm.sh
+```
+
+Then, in order for it to take effect, you will need to log
 into the **controller node** for the cluster and run the following command, **after** 
 performing the actions above:
 
