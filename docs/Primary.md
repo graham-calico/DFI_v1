@@ -59,17 +59,12 @@ $ module load python/3.7.8
 
 An additional set-up script is used to increase the maximum array size
 for the Slurm-GCP cluster.  These instructions make heavy use of Slurm's `--array` feature,
-so this adjustment is recommended.  Run this script on the login node:
+so this adjustment is recommended.  In order to update this parameter, 
+you will need to log
+into the **controller node** for the cluster and run the following commands:
 
 ```bash
 $ ./adjustSlurm.sh
-```
-
-Then, in order for it to take effect, you will need to log
-into the **controller node** for the cluster and run the following command, **after** 
-performing the actions above:
-
-```bash
 $ sudo systemctl restart slurmctld
 ```
 
