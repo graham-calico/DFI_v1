@@ -4,6 +4,7 @@ import os
 import numpy as np
 import subprocess
 from google.cloud import storage
+import shutil, stat
 
 CONST_FRAME_PER_SEC = 24
 
@@ -19,19 +20,28 @@ def main():
                   help="the result (output) file (also basename for temp dirs)")
   ap.add_argument("-g","--gcloud_out_file",
                   help="the result (output) file, path for gcloud writing (INSTEAD of -o)")
+  ap.add_argument("-l","--local_bucket_mount",
+                  help="optional: a path leading to the mounted bucket",
+                  default='')
   ap.add_argument("--one_block_test",
                   help="limits analysis to one date block (~1 week)",
                   action='store_true')
   args = vars(ap.parse_args())
 
-  usingLocal = (args["out_file"] is not None)
-  usingGcloud = (args["gcloud_out_file"] is not None)
-  if usingLocal and usingGcloud:
+  usingLocalOut = (args["out_file"] is not None)
+  usingGcloudOut = (args["gcloud_out_file"] is not None)
+  if usingLocalOut and usingGcloudOut:
     raise ValueError("must write to only local OR gcloud")
-  if not(usingLocal) and not(usingGcloud):
+  if not(usingLocalOut) and not(usingGcloudOut):
     raise ValueError("must write to either local OR gcloud")
-  if usingGcloud:
+  if usingGcloudOut:
     gcOutfName = args["gcloud_out_file"]
+  usingLocBucket = False
+  if args['local_bucket_mount']:
+    usingLocBucket = True
+    localBucket = args['local_bucket_mount']
+    if not os.path.isdir(localBucket):
+      raise ValueError('local mount path to bucket not valid')
 
   # all of the analyses to be performed, in the order
   # of their columns in the output file
@@ -48,7 +58,6 @@ def main():
   dataSourceL = dataSrcToAnalyses.keys()
   analysisD = getFileAsDict('analysisImplementations.py')
   
-
   aConfigD = getFileAsDict(args['analysis_config'])
     
   gsToDataDir = {}  
@@ -61,11 +70,14 @@ def main():
         raise ValueError("analysis type not found")
       if not(analysis_type+"_columns" in analysisD):
         raise ValueError("analysis type is missing '_columns' label function")
-    gsToDataDir[dataName] = makeTopDataDir(aConfigD,dataName)
+    if usingLocBucket:
+      gsToDataDir[dataName] = makeTopDataDirLoc(aConfigD,dataName,localBucket)
+    else:
+      gsToDataDir[dataName] = makeTopDataDirGcp(aConfigD,dataName)
 
   # outfile defined differently if output is local or moved
   # to gcloud storage
-  if usingLocal:
+  if usingLocalOut:
     outfName = args["out_file"]
   else:
     randNL = str(np.random.rand()).split('.')
@@ -84,7 +96,7 @@ def main():
   tmpDir = '.'.join(outfName.split('.')[:-1]) + '_TEMP'
   if not(os.path.isdir(tmpDir)): os.mkdir(tmpDir)
   else: raise ValueError("temp dir already existed: "+tmpDir)
-  if usingGcloud:
+  if usingGcloudOut:
     # creating a sub-dir for the temp file so that the                                              
     # only files in the tmpDir will be from DL                                                      
     tmpSubDir = os.path.join(tmpDir,'Results')
@@ -104,7 +116,9 @@ def main():
 
   if args['one_block_test']:
     devBlockL = devBlockL[:1]
-  
+
+  getDataL = getDataGetter(gsToDataDir,usingLocBucket)
+    
   # each of these blocks is a "week" from the DFI (one measure)
   for device,dateA,dateZ in devBlockL:
     
@@ -114,7 +128,7 @@ def main():
     # appropriate analyses run on it
     for dataSource in dataSourceL:
 
-      dataL = getDataL(dateA,dateZ,dataSource,device,gsToDataDir[dataSource],tmpDir)
+      dataL = getDataL(dateA,dateZ,dataSource,device,tmpDir)
       
       # analysis
       print(makeDateStr(dateA)+' analysis of '+dataSource+'...')
@@ -130,7 +144,7 @@ def main():
 
   # if using GCloud, copy the results file to the cloud
   # then delete the local copy (gsutil mv does both)
-  if usingGcloud:
+  if usingGcloudOut:
     gsCommand = ("gsutil mv "+outfName+" "+gcOutfName).split()
     p = subprocess.Popen(gsCommand)
     (output,err) = p.communicate()
@@ -143,12 +157,19 @@ def main():
 ######## HELPER FUNCTIONS #########
 
 
-def makeTopDataDir(aConfigD,aType):
+def makeTopDataDirGcp(aConfigD,aType):
   tiDL = list(filter(lambda i:i['name']==aType, aConfigD['aInfoL']))
   if len(tiDL)==0: raise ValueError('analysis type missing: '+aType)
   if len(tiDL)!=1: raise ValueError('analysis type duplicated: '+aType)
   tiD = tiDL[0]
   return '/'.join(['gs:/',tiD['out_bucket'],tiD['out_folder']])
+
+def makeTopDataDirLoc(aConfigD,aType,locMount):
+  tiDL = list(filter(lambda i:i['name']==aType, aConfigD['aInfoL']))
+  if len(tiDL)==0: raise ValueError('analysis type missing: '+aType)
+  if len(tiDL)!=1: raise ValueError('analysis type duplicated: '+aType)
+  tiD = tiDL[0]
+  return os.path.join(locMount,tiD['out_folder'])
 
 def makeDateStr(today):
   """for printing & internal representation"""
@@ -192,50 +213,79 @@ def makeDatePath(date):
   yS,mS,dS = str(y),dtMdStr(m),dtMdStr(d)
   return '/'.join([yS,mS,dS])
 
-
-def getDataL(dateA,dateZ,dataSource,device,gsDataDir,tmpDir):
-  """collects all of the data from the specified date block
-  (starting at dateA, stopping at - NOT INCLUDING - dateZ)"""
-  # all of the values will be stored here, with
-  # keys that can be sorted chronologically
-  dataD = {}
-  dayStep = DT.timedelta(days=1)
-  if gsDataDir[-1]!='/': gsDataDir += '/'
-
-  # iterate through all of the days in the block
-  dt = dateA
-  while dt < dateZ:        
-    # variables to hold current value while iterating
-    today = dt
-    tomorrow = dt + dayStep
-    dt = tomorrow
-    datePath = makeDatePath(today)
-    getDatetime = funcForDatetimeFromFile(today)    
-    
-    # collect the data
-    print(datePath+' download...')
-    # collect the day's data from the cloud
+def getDataGetter(gsToDataDir,usingLocBucket):
+  # two alternative data collectors
+  def collectorGcp(gsDataDir,device,datePath,tmpDir):
     gsDir = gsDataDir + device + '/' + datePath + '/'
     gsCommand = ("gsutil -m cp "+gsDir+"* "+tmpDir).split()
     p = subprocess.Popen(gsCommand)
     (output,err) = p.communicate()
+  def collectorGcp_newNotReady(gsDataDir,device,datePath,tmpDir):
+    gsDir = gsDataDir + device + '/' + datePath + '/'
+    gsCommand = ("gsutil -m cp "+gsDir+"* "+tmpDir).split()
+    p = subprocess.Popen(gsCommand)
+    (output,err) = p.communicate()
+    raise ValueError('in the middle of correcting')
+    input_mov_project = analysisConfig['input_mov_project']
+    input_mov_bucket = analysisConfig['input_mov_bucket']
+    storage_client_in = storage.Client(project=in_mov_project)
+    bucket_in = storage_client_in.bucket(in_mov_bucket)
+    blob_in = bucket_in.blob(in_mov_blob)
+    blob_in.download_to_filename(input_mov_local)
+  def collectorLoc(gsDataDir,device,datePath,tmpDir):
+    gsDir = gsDataDir + device + '/' + datePath + '/'
+    for f in os.listdir(gsDir):
+      oldF,newF = os.path.join(gsDir,f),os.path.join(tmpDir,f)
+      shutil.copy(oldF,newF)
+      os.chmod(newF, os.stat(newF).st_mode | stat.S_IRUSR)
+  # assign the variable name to appropriate one
+  if usingLocBucket: collectorUsed = collectorLoc
+  else: collectorUsed = collectorGcp
+  
+  # now the function to be used
+  def getDataL(dateA,dateZ,dataSource,device,tmpDir):
+    gsDataDir = gsToDataDir[dataSource]
+    """collects all of the data from the specified date block
+    (starting at dateA, stopping at - NOT INCLUDING - dateZ)"""
+    # all of the values will be stored here, with
+    # keys that can be sorted chronologically
+    dataD = {}
+    dayStep = DT.timedelta(days=1)
+    if gsDataDir[-1]!='/': gsDataDir += '/'
 
-    # read in the data, erase the files
-    print(datePath+' reading...')
-    fullFnameL = os.listdir(tmpDir)
-    fullFnameL = list(map(lambda i: os.path.join(tmpDir,i), fullFnameL))
-    fullFnameL = list(filter(lambda i: os.path.isfile(i), fullFnameL))
-    # help for sorting files by time
-    for fn in fullFnameL: dataD[getDatetime(fn)] = np.load(fn)
-    for fname in fullFnameL: os.remove(fname)
+    # iterate through all of the days in the block
+    dt = dateA
+    while dt < dateZ:        
+      # variables to hold current value while iterating
+      today = dt
+      tomorrow = dt + dayStep
+      dt = tomorrow
+      datePath = makeDatePath(today)
+      getDatetime = funcForDatetimeFromFile(today)    
+    
+      # collect the data
+      print(datePath+' download...')
+      # collect the day's data from the cloud
+      collectorUsed(gsDataDir,device,datePath,tmpDir)
+
+      # read in the data, erase the files
+      print(datePath+' reading...')
+      fullFnameL = os.listdir(tmpDir)
+      fullFnameL = list(map(lambda i: os.path.join(tmpDir,i), fullFnameL))
+      fullFnameL = list(filter(lambda i: os.path.isfile(i), fullFnameL))
+      # help for sorting files by time
+      for fn in fullFnameL: dataD[getDatetime(fn)] = np.load(fn)
+      for fname in fullFnameL: os.remove(fname)
           
-  # now that it is NR, I will be able to sort
-  # across the entire multi-day time interval
-  dtFrDataL = [(dt,CONST_FRAME_PER_SEC,dataD[dt]) for dt in dataD.keys()]
-  # sort based on file basenames (will sort by time)
-  dtFrDataL.sort()
-  return dtFrDataL
+    # now that it is NR, I will be able to sort
+    # across the entire multi-day time interval
+    dtFrDataL = [(dt,CONST_FRAME_PER_SEC,dataD[dt]) for dt in dataD.keys()]
+    # sort based on file basenames (will sort by time)
+    dtFrDataL.sort()
+    return dtFrDataL
 
+  # the function above will get the data
+  return getDataL
 
 
 ### PARSING THE DEVICE MAPPING/DATA BLOCK FILE ###

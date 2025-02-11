@@ -13,7 +13,14 @@ def main():
     ap.add_argument("-o","--output_dir",
                     help="REQ: directory int which output files will be written")
     ap.add_argument("-g","--gcloud_output_dir",
-                    help="Allows jobs to be run on the cluster: outfiles temp written to this GCloud 'directory' (starts w/gs://)")
+                    help="Outfiles temp written to this GCloud dir (starts w/gs://).",
+                    default='')
+    ap.add_argument("--slurm",
+                    help="sets it run on slurm",
+                    action="store_true")
+    ap.add_argument("-s","--source_mount",
+                    help="source files found on this mounted bucket path (alt to bucket name)",
+                    default='')
     ap.add_argument("-l","--custom_label",
                     help="OPT: special name label for scripts & tasks (def: dfi)",
                     default="dfi")
@@ -27,7 +34,7 @@ def main():
 
     # will scripts be created allowing cluster running,
     # i.e. writing output to gcloud?
-    usingGcloud = (args["gcloud_output_dir"] is not None)
+    usingGcloud = args["slurm"]
 
     # static name (will be modified with "custom_label"
     uniqueIdFile = "idList_"+args['custom_label']+".txt"
@@ -42,9 +49,17 @@ def main():
       raise ValueError("output directory doesn't exist: "+args['output_dir'])
     # make sure that the trailing slash is present
     if not(args['output_dir'][-1]=='/'): args['output_dir'] += '/'
-    if usingGcloud:
+    # this is an option for the slurm tasks
+    usingGcpOut = not(args['gcloud_output_dir']=='')
+    if usingGcpOut:
       if not(args['gcloud_output_dir'][-1]=='/'):
         args['gcloud_output_dir'] += '/'
+
+    usingBmount = not(args['source_mount']=='')
+    if usingBmount:
+      bucketMount = args['source_mount']
+      if not(os.path.isdir(bucketMount)):
+        raise ValueError('bucket mount not found')
         
     # make sure slurmlog directory exists
     slurmlogDir = 'slurmlogs'
@@ -66,8 +81,6 @@ def main():
     findReplaceL.append( ('[ID LIST FILE NAME HERE]',uniqueIdFile) )
     findReplaceL.append( ('[CONFIG FILE NAME HERE]',args['config_file']) )
     findReplaceL.append( ('[DEV MAP FILE NAME HERE]',args['dev_map_file']) )
-#    findReplaceL.append( ('[OUT DIR NAME HERE]',args['output_dir']) )
-#    findReplaceL.append( ('',args['']) )
     
     baseScript = runFullInitial
     for oldTxt,newTxt in findReplaceL:
@@ -89,24 +102,28 @@ def main():
     chgD_testL['[EXTRA ARGS HERE]'] = ' --one_block_test'
     chgD_testL['[ASSIGN TASK NUMBER HERE]'] = assign_tasknum_local
 #    chgD_testL[''] = ''
-    
+      
+    if usingBmount:
+      chgD_local['[EXTRA ARGS HERE]'] += " -l "+bucketMount
+      chgD_testL['[EXTRA ARGS HERE]'] += " -l "+bucketMount
+      
     if usingGcloud:
-      chgD_slurm = {}
+      chgD_slurm = chgD_local.copy()
       chgD_slurm['fname'] = 'runSlurm_'+args['custom_label']+'.sh'
       chgD_slurm['header'] = header_for_slurm
-      chgD_slurm['[OUTPUT COMMAND HERE]'] = "-g "+args['gcloud_output_dir']+"${MOUSEID}.tsv"
-      chgD_slurm['[EXTRA ARGS HERE]'] = ''
+      if usingGcpOut:
+        chgD_slurm['[OUTPUT COMMAND HERE]'] = "-g "+args['gcloud_output_dir']+"${MOUSEID}.tsv"
       chgD_slurm['[ASSIGN JOB NAME HERE]'] = args['custom_label']
       chgD_slurm['[ASSIGN TASK NUMBER HERE]'] = assign_tasknum_slurm
       chgD_slurm['[SBATCH NODES HERE]'] = args['sbatch_nodes']
       chgD_slurm['[SBATCH CPUS HERE]'] = args['sbatch_cpus']
 #      chgD_slurm[''] = ''
 
-      chgD_testS = {}
+      chgD_testS = chgD_testL.copy()
       chgD_testS['fname'] = 'runSlurm_'+args['custom_label']+'_test.sh'
       chgD_testS['header'] = header_for_slurm
-      chgD_testS['[OUTPUT COMMAND HERE]'] = "-g "+args['gcloud_output_dir']+"${MOUSEID}.tsv"
-      chgD_testS['[EXTRA ARGS HERE]'] = ' --one_block_test'
+      if usingGcpOut:
+        chgD_testS['[OUTPUT COMMAND HERE]'] = chgD_slurm['[OUTPUT COMMAND HERE]']
       chgD_testS['[ASSIGN JOB NAME HERE]'] = args['custom_label']+'T'
       chgD_testS['[ASSIGN TASK NUMBER HERE]'] = assign_tasknum_slurm
       chgD_testS['[SBATCH NODES HERE]'] = args['sbatch_nodes']
